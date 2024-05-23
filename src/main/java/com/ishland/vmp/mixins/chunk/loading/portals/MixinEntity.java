@@ -5,8 +5,11 @@ import com.ishland.vmp.common.chunk.loading.IEntityPortalInterface;
 import com.ishland.vmp.common.chunk.loading.IPOIAsyncPreload;
 import com.ishland.vmp.common.chunk.loading.async_chunks_on_player_login.AsyncChunkLoadUtil;
 import com.ishland.vmp.common.config.Config;
+import com.ishland.vmp.mixins.access.INetherPortalBlock;
+import com.ishland.vmp.mixins.access.IPortalManager;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.NetherPortalBlock;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityDimensions;
 import net.minecraft.entity.EntityPose;
@@ -18,6 +21,7 @@ import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.state.property.Properties;
 import net.minecraft.text.Text;
+import net.minecraft.util.PortalManager;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
@@ -58,13 +62,7 @@ public abstract class MixinEntity implements IEntityPortalInterface {
     private static final CompletableFuture<TeleportTarget> TARGET_COMPLETED_FUTURE = CompletableFuture.completedFuture(null);
 
     @Shadow
-    protected boolean inNetherPortal;
-
-    @Shadow
     public World world;
-
-    @Shadow
-    public abstract boolean hasVehicle();
 
     @Shadow
     public abstract double getX();
@@ -80,29 +78,7 @@ public abstract class MixinEntity implements IEntityPortalInterface {
     private static Logger LOGGER;
 
     @Shadow
-    protected int netherPortalTime;
-
-    @Shadow
-    public abstract int getMaxNetherPortalTime();
-
-    @Shadow
-    @Nullable
-    protected abstract TeleportTarget getTeleportTarget(ServerWorld destination);
-
-    @Shadow
-    public abstract @Nullable Entity moveToWorld(Entity.TeleportTargetSupplier teleportTargetSupplier);
-
-    @Shadow
-    protected BlockPos lastNetherPortalPosition;
-
-    @Shadow
     protected abstract Vec3d positionInPortal(Direction.Axis portalAxis, BlockLocating.Rectangle portalRect);
-
-    @Shadow
-    public abstract EntityDimensions getDimensions(EntityPose pose);
-
-    @Shadow
-    public abstract EntityPose getPose();
 
     @Shadow
     public abstract Vec3d getVelocity();
@@ -113,14 +89,9 @@ public abstract class MixinEntity implements IEntityPortalInterface {
     @Shadow
     public abstract float getPitch();
 
-    @Shadow
-    public abstract boolean isRemoved();
+    @Shadow @Nullable public PortalManager portalManager;
 
-    @Shadow
-    public abstract void detach();
-
-    @Shadow
-    public abstract EntityType<?> getType();
+    @Shadow public abstract World getWorld();
 
     @Unique
     private CompletableFuture<TeleportTarget> vmp$locatePortalFuture;
@@ -131,19 +102,19 @@ public abstract class MixinEntity implements IEntityPortalInterface {
     @Unique
     private long vmp$locateIndex = 0;
 
-    @Inject(method = "tickPortal", at = @At("HEAD"))
-    private void onTickNetherPortal(CallbackInfo ci) {
+    @Inject(method = "tickPortalTeleportation", at = @At("HEAD"))
+    private void onTickPortal(CallbackInfo ci) {
         if (this.world.isClient) return;
         //noinspection ConstantConditions
-        if ((Object) this instanceof ServerPlayerEntity) {
-            if (this.inNetherPortal && this.netherPortalTime >= this.getMaxNetherPortalTime() - 50) {
+        if ((Object) this instanceof ServerPlayerEntity player) {
+            if (this.portalManager != null && this.portalManager.isInPortal() && this.portalManager.getTicksInPortal() >= ((IPortalManager)this.portalManager).getPortal().getPortalDelay(player.getServerWorld(), player) - 50) {
                 if (vmp$locatePortalFuture == null && vmp$lastLocateFuture.isDone()) {
                     MinecraftServer minecraftServer = this.world.getServer();
                     RegistryKey<World> registryKey = this.world.getRegistryKey() == World.NETHER ? World.OVERWORLD : World.NETHER;
                     ServerWorld destination = minecraftServer.getWorld(registryKey);
                     long currentLocateIndex = ++vmp$locateIndex;
                     long startTime = System.nanoTime();
-                    if (Config.SHOW_ASYNC_LOADING_MESSAGES && (Object) this instanceof ServerPlayerEntity player) {
+                    if (Config.SHOW_ASYNC_LOADING_MESSAGES) {
                         player.sendMessage(Text.literal("Locating portal destination..."), true);
                     }
                     vmp$lastLocateFuture = vmp$locatePortalFuture =
@@ -164,23 +135,17 @@ public abstract class MixinEntity implements IEntityPortalInterface {
                                         if (currentLocateIndex != vmp$locateIndex) return;
                                         if (throwable != null) {
                                             LOGGER.error("Error occurred for entity {} while locating portal", this, throwable);
-                                            if (Config.SHOW_ASYNC_LOADING_MESSAGES && (Object) this instanceof ServerPlayerEntity player) {
-                                                player.sendMessage(Text.literal("Error occurred while locating portal"), true);
-                                            }
+                                            player.sendMessage(Text.literal("Error occurred while locating portal"), true);
                                         } else if (target != null) {
                                             if (Config.SHOW_ASYNC_LOADING_MESSAGES) {
                                                 LOGGER.info("Portal located for entity {} at {}", this, target);
                                                 final BlockPos blockPos = BlockPos.ofFloored(target.pos().x, target.pos().y, target.pos().z);
-                                                if ((Object) this instanceof ServerPlayerEntity player) {
-                                                    player.sendMessage(Text.literal("Portal located after %.1fms, waiting for portal teleportation...".formatted((System.nanoTime() - startTime) / 1_000_000.0)), true);
-                                                }
+                                                player.sendMessage(Text.literal("Portal located after %.1fms, waiting for portal teleportation...".formatted((System.nanoTime() - startTime) / 1_000_000.0)), true);
                                             }
                                         } else {
                                             if (Config.SHOW_ASYNC_LOADING_MESSAGES) {
                                                 LOGGER.info("Portal not located for entity {} at {}", this, target);
-                                                if ((Object) this instanceof ServerPlayerEntity player) {
-                                                    player.sendMessage(Text.literal("Portal not located, will spawn a new portal later"), true);
-                                                }
+                                                player.sendMessage(Text.literal("Portal not located, will spawn a new portal later"), true);
                                             }
                                         }
                                     }, destination.getServer())
@@ -193,7 +158,7 @@ public abstract class MixinEntity implements IEntityPortalInterface {
                     vmp$locatePortalFuture = null;
                     vmp$locateIndex++;
                     if (!done) {
-                        if (Config.SHOW_ASYNC_LOADING_MESSAGES && (Object) this instanceof ServerPlayerEntity player) {
+                        if (Config.SHOW_ASYNC_LOADING_MESSAGES) {
                             player.sendMessage(Text.literal("Portal location cancelled"), true);
                         }
                     }
@@ -202,21 +167,21 @@ public abstract class MixinEntity implements IEntityPortalInterface {
         }
     }
 
-    @Redirect(method = "tickPortal", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/Entity;getMaxNetherPortalTime()I"))
-    private int redirectMaxPortalTime(Entity instance) {
-        if (instance instanceof ServerPlayerEntity) {
-            return (vmp$locatePortalFuture != null && vmp$locatePortalFuture.isDone()) ? instance.getMaxNetherPortalTime() : Integer.MAX_VALUE;
-        }
-        return instance.getMaxNetherPortalTime();
-    }
+//    @Redirect(method = "tickPortal", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/Entity;getMaxNetherPortalTime()I"))
+//    private int redirectMaxPortalTime(Entity instance) {
+//        if (instance instanceof ServerPlayerEntity) {
+//            return (vmp$locatePortalFuture != null && vmp$locatePortalFuture.isDone()) ? instance.getMaxNetherPortalTime() : Integer.MAX_VALUE;
+//        }
+//        return instance.getMaxNetherPortalTime();
+//    }
 
-    @Inject(method = "getTeleportTarget", at = @At("HEAD"), cancellable = true)
-    private void beforeGetTeleportTarget(ServerWorld destination, CallbackInfoReturnable<TeleportTarget> cir) {
-        if (this.vmp$locatePortalFuture != null && this.vmp$locatePortalFuture.isDone() && !this.vmp$locatePortalFuture.isCompletedExceptionally()) {
-            final TeleportTarget value = this.vmp$locatePortalFuture.join();
-            if (value != null) cir.setReturnValue(value);
-        }
-    }
+//    @Inject(method = "getTeleportTarget", at = @At("HEAD"), cancellable = true)
+//    private void beforeGetTeleportTarget(ServerWorld destination, CallbackInfoReturnable<TeleportTarget> cir) {
+//        if (this.vmp$locatePortalFuture != null && this.vmp$locatePortalFuture.isDone() && !this.vmp$locatePortalFuture.isCompletedExceptionally()) {
+//            final TeleportTarget value = this.vmp$locatePortalFuture.join();
+//            if (value != null) cir.setReturnValue(value);
+//        }
+//    }
 
     @Unique
     public CompletionStage<TeleportTarget> getTeleportTargetAtAsync(ServerWorld destination) {
@@ -248,15 +213,15 @@ public abstract class MixinEntity implements IEntityPortalInterface {
 //                            }
 //                        }, destination.getServer())
                         .thenComposeAsync(optional -> optional.map(rect ->
-                                        AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(this.lastNetherPortalPosition))
+                                        AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(this.portalManager.getPortalPos()))
                                                 .thenComposeAsync(unused -> {
-                                                    BlockState blockState = this.world.getBlockState(this.lastNetherPortalPosition);
+                                                    BlockState blockState = this.world.getBlockState(this.portalManager.getPortalPos());
                                                     Direction.Axis axis;
                                                     Vec3d vec3d;
                                                     if (blockState.contains(Properties.HORIZONTAL_AXIS)) {
                                                         axis = blockState.get(Properties.HORIZONTAL_AXIS);
                                                         BlockLocating.Rectangle rectangle = BlockLocating.getLargestRectangle(
-                                                                this.lastNetherPortalPosition, axis, 21, Direction.Axis.Y, 21, pos -> this.world.getBlockState(pos) == blockState
+                                                            this.portalManager.getPortalPos(), axis, 21, Direction.Axis.Y, 21, pos -> this.world.getBlockState(pos) == blockState
                                                         );
                                                         vec3d = this.positionInPortal(axis, rectangle);
                                                     } else {
@@ -265,7 +230,7 @@ public abstract class MixinEntity implements IEntityPortalInterface {
                                                     }
 
                                                     return AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(rect.lowerLeft))
-                                                            .thenApplyAsync(unused1 -> NetherPortal.getNetherTeleportTarget(
+                                                            .thenApplyAsync(unused1 -> INetherPortalBlock.invokeGetExitPortalTarget(
                                                                             destination, rect, axis, vec3d, (Entity) (Object) this, this.getVelocity(), this.getYaw(), this.getPitch()),
                                                                     destination.getServer());
                                                 }, destination.getServer()))
