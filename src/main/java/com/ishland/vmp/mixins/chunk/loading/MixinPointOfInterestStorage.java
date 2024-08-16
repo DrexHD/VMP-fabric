@@ -7,6 +7,7 @@ import com.mojang.datafixers.DataFixer;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import net.minecraft.class_9820;
 import net.minecraft.datafixer.DataFixTypes;
 import net.minecraft.registry.DynamicRegistryManager;
 import net.minecraft.server.world.ServerWorld;
@@ -32,8 +33,8 @@ public abstract class MixinPointOfInterestStorage extends SerializingRegionBased
 
     @Shadow @Final private LongSet preloadedChunks;
 
-    public MixinPointOfInterestStorage(ChunkPosKeyedStorage storageAccess, Function<Runnable, Codec<PointOfInterestSet>> codecFactory, Function<Runnable, PointOfInterestSet> factory, DynamicRegistryManager registryManager, HeightLimitView world) {
-        super(storageAccess, codecFactory, factory, registryManager, world);
+    public MixinPointOfInterestStorage(ChunkPosKeyedStorage storageAccess, Function<Runnable, Codec<PointOfInterestSet>> codecFactory, Function<Runnable, PointOfInterestSet> factory, DynamicRegistryManager registryManager, class_9820 arg, HeightLimitView heightLimitView) {
+        super(storageAccess, codecFactory, factory, registryManager, arg, heightLimitView);
     }
 
     @Override

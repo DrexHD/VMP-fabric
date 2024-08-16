@@ -1,7 +1,7 @@
 package com.ishland.vmp.mixins.access;
 
 import net.minecraft.block.Portal;
-import net.minecraft.util.PortalManager;
+import net.minecraft.world.dimension.PortalManager;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 

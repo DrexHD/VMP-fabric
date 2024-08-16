@@ -11,9 +11,6 @@ import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.NetherPortalBlock;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityDimensions;
-import net.minecraft.entity.EntityPose;
-import net.minecraft.entity.EntityType;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -21,18 +18,16 @@ import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.state.property.Properties;
 import net.minecraft.text.Text;
-import net.minecraft.util.PortalManager;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.BlockLocating;
-import net.minecraft.world.Heightmap;
 import net.minecraft.world.TeleportTarget;
 import net.minecraft.world.World;
 import net.minecraft.world.border.WorldBorder;
 import net.minecraft.world.dimension.DimensionType;
-import net.minecraft.world.dimension.NetherPortal;
+import net.minecraft.world.dimension.PortalManager;
 import net.minecraft.world.poi.PointOfInterest;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
@@ -44,9 +39,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.Comparator;
 import java.util.Iterator;
@@ -80,15 +73,6 @@ public abstract class MixinEntity implements IEntityPortalInterface {
     @Shadow
     protected abstract Vec3d positionInPortal(Direction.Axis portalAxis, BlockLocating.Rectangle portalRect);
 
-    @Shadow
-    public abstract Vec3d getVelocity();
-
-    @Shadow
-    public abstract float getYaw();
-
-    @Shadow
-    public abstract float getPitch();
-
     @Shadow @Nullable public PortalManager portalManager;
 
     @Shadow public abstract World getWorld();
@@ -107,7 +91,7 @@ public abstract class MixinEntity implements IEntityPortalInterface {
         if (this.world.isClient) return;
         //noinspection ConstantConditions
         if ((Object) this instanceof ServerPlayerEntity player) {
-            if (this.portalManager != null && this.portalManager.isInPortal() && this.portalManager.getTicksInPortal() >= ((IPortalManager)this.portalManager).getPortal().getPortalDelay(player.getServerWorld(), player) - 50) {
+            if (this.portalManager != null && this.portalManager.isInPortal() && ((IPortalManager)this.portalManager).getPortal() instanceof NetherPortalBlock && this.portalManager.getTicksInPortal() >= ((IPortalManager)this.portalManager).getPortal().getPortalDelay(player.getServerWorld(), player) - 50) {
                 if (vmp$locatePortalFuture == null && vmp$lastLocateFuture.isDone()) {
                     MinecraftServer minecraftServer = this.world.getServer();
                     RegistryKey<World> registryKey = this.world.getRegistryKey() == World.NETHER ? World.OVERWORLD : World.NETHER;
@@ -118,7 +102,7 @@ public abstract class MixinEntity implements IEntityPortalInterface {
                         player.sendMessage(Text.literal("Locating portal destination..."), true);
                     }
                     vmp$lastLocateFuture = vmp$locatePortalFuture =
-                            getTeleportTargetAtAsync(destination)
+                            createTeleportTargetNetherPortalBlockAsync(destination)
                                     .thenComposeAsync(target -> {
                                         if (target != null) {
                                             return AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(BlockPos.ofFloored(target.pos().x, target.pos().y, target.pos().z)))
@@ -184,69 +168,41 @@ public abstract class MixinEntity implements IEntityPortalInterface {
 //    }
 
     @Unique
-    public CompletionStage<TeleportTarget> getTeleportTargetAtAsync(ServerWorld destination) {
+    public CompletionStage<TeleportTarget> createTeleportTargetNetherPortalBlockAsync(ServerWorld destination) {
         // TODO [VanillaCopy]
-        boolean bl = this.world.getRegistryKey() == World.END && destination.getRegistryKey() == World.OVERWORLD;
-        boolean bl2 = destination.getRegistryKey() == World.END;
-        if (!bl && !bl2) {
-            boolean bl3 = destination.getRegistryKey() == World.NETHER;
-            if (this.world.getRegistryKey() != World.NETHER && !bl3) {
-                return CompletableFuture.completedFuture(null);
-            } else {
-                WorldBorder worldBorder = destination.getWorldBorder();
-                double d = DimensionType.getCoordinateScaleFactor(this.world.getDimension(), destination.getDimension());
-                BlockPos destPos = worldBorder.clamp(this.getX() * d, this.getY(), this.getZ() * d);
-                return this.getPortalRectAtAsync(destination, destPos, bl3, worldBorder)
-//                        .thenComposeAsync((Optional<BlockLocating.Rectangle> optional) -> {
-//                            if ((Object) this instanceof ServerPlayerEntity && optional.isEmpty()) {
-//                                return AsyncChunkLoadUtil.scheduleChunkLoadWithRadius(destination, new ChunkPos(destPos), 3)
-//                                        .thenApply(unused1 -> {
-//                                            Direction.Axis axis = this.world.getBlockState(this.lastNetherPortalPosition).getOrEmpty(NetherPortalBlock.AXIS).orElse(Direction.Axis.X);
-//                                            Optional<BlockLocating.Rectangle> optional2 = destination.getPortalForcer().createPortal(destPos, axis);
-//                                            if (!optional2.isPresent()) {
-//                                                LOGGER.error("Unable to create a portal, likely target out of worldborder");
-//                                            }
-//                                            return optional2;
-//                                        });
-//                            } else {
-//                                return CompletableFuture.completedFuture(optional);
-//                            }
-//                        }, destination.getServer())
-                        .thenComposeAsync(optional -> optional.map(rect ->
-                                        AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(this.portalManager.getPortalPos()))
-                                                .thenComposeAsync(unused -> {
-                                                    BlockState blockState = this.world.getBlockState(this.portalManager.getPortalPos());
-                                                    Direction.Axis axis;
-                                                    Vec3d vec3d;
-                                                    if (blockState.contains(Properties.HORIZONTAL_AXIS)) {
-                                                        axis = blockState.get(Properties.HORIZONTAL_AXIS);
-                                                        BlockLocating.Rectangle rectangle = BlockLocating.getLargestRectangle(
-                                                            this.portalManager.getPortalPos(), axis, 21, Direction.Axis.Y, 21, pos -> this.world.getBlockState(pos) == blockState
-                                                        );
-                                                        vec3d = this.positionInPortal(axis, rectangle);
-                                                    } else {
-                                                        axis = Direction.Axis.X;
-                                                        vec3d = new Vec3d(0.5, 0.0, 0.0);
-                                                    }
-
-                                                    return AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(rect.lowerLeft))
-                                                            .thenApplyAsync(unused1 -> INetherPortalBlock.invokeGetExitPortalTarget(
-                                                                            destination, rect, axis, vec3d, (Entity) (Object) this, this.getVelocity(), this.getYaw(), this.getPitch()),
-                                                                    destination.getServer());
-                                                }, destination.getServer()))
-                                .orElse(CompletableFuture.completedFuture(null)), destination.getServer());
-            }
+        RegistryKey<World> registryKey = world.getRegistryKey() == World.NETHER ? World.OVERWORLD : World.NETHER;
+        ServerWorld serverWorld = world.getServer().getWorld(registryKey);
+        boolean inNether = serverWorld.getRegistryKey() == World.NETHER;
+        WorldBorder worldBorder = serverWorld.getWorldBorder();
+        double d = DimensionType.getCoordinateScaleFactor(world.getDimension(), serverWorld.getDimension());
+        BlockPos destPos = worldBorder.clamp(this.getX() * d, this.getY(), this.getZ() * d);
+        if (this.world.getRegistryKey() != World.NETHER && !inNether) {
+            return CompletableFuture.completedFuture(null);
         } else {
-            BlockPos blockPos;
-            if (bl2) {
-                blockPos = ServerWorld.END_SPAWN_POS;
-            } else {
-                blockPos = destination.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, destination.getSpawnPos());
-            }
+            return this.getPortalRectAtAsync(destination, destPos, inNether, worldBorder)
+                    .thenComposeAsync(optional -> optional.map(rect ->
+                                    AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(this.portalManager.getPortalPos()))
+                                            .thenComposeAsync(unused -> {
+                                                BlockState blockState = this.world.getBlockState(this.portalManager.getPortalPos());
+                                                Direction.Axis axis;
+                                                Vec3d vec3d;
+                                                if (blockState.contains(Properties.HORIZONTAL_AXIS)) {
+                                                    axis = blockState.get(Properties.HORIZONTAL_AXIS);
+                                                    BlockLocating.Rectangle rectangle = BlockLocating.getLargestRectangle(
+                                                        this.portalManager.getPortalPos(), axis, 21, Direction.Axis.Y, 21, pos -> this.world.getBlockState(pos) == blockState
+                                                    );
+                                                    vec3d = this.positionInPortal(axis, rectangle);
+                                                } else {
+                                                    axis = Direction.Axis.X;
+                                                    vec3d = new Vec3d(0.5, 0.0, 0.0);
+                                                }
 
-            return CompletableFuture.completedFuture(new TeleportTarget(
-                    destination, new Vec3d((double) blockPos.getX() + 0.5, blockPos.getY(), (double) blockPos.getZ() + 0.5), this.getVelocity(), this.getYaw(), this.getPitch()
-            ));
+                                                return AsyncChunkLoadUtil.scheduleChunkLoad(destination, new ChunkPos(rect.lowerLeft))
+                                                        .thenApplyAsync(unused1 -> INetherPortalBlock.invokeGetExitPortalTarget(
+                                                                (Entity) (Object) this, this.portalManager.getPortalPos(), rect, destination, TeleportTarget.field_52246.then(TeleportTarget.field_52247)),
+                                                                destination.getServer());
+                                            }, destination.getServer()))
+                            .orElse(CompletableFuture.completedFuture(null)), destination.getServer());
         }
     }
 
