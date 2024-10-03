@@ -10,6 +10,7 @@ import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.PositionFlag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandOutput;
+import net.minecraft.server.command.LookTarget;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.command.TeleportCommand;
 import net.minecraft.server.rcon.RconCommandOutput;
@@ -38,7 +39,7 @@ public abstract class MixinTeleportCommand {
     }
 
     @Shadow
-    protected static void teleport(ServerCommandSource source, Entity target, ServerWorld world, double x, double y, double z, Set<PositionFlag> movementFlags, float yaw, float pitch, TeleportCommand.@Nullable LookTarget facingLocation) throws CommandSyntaxException {
+    private static void teleport(ServerCommandSource source, Entity target, ServerWorld world, double x, double y, double z, Set<PositionFlag> movementFlags, float yaw, float pitch, @Nullable LookTarget facingLocation) throws CommandSyntaxException {
     }
 
     /**
@@ -107,7 +108,7 @@ public abstract class MixinTeleportCommand {
             ServerWorld world,
             PosArgument location,
             @Nullable PosArgument rotation,
-            @Nullable TeleportCommand.LookTarget facingLocation
+            @Nullable LookTarget facingLocation
     ) throws CommandSyntaxException {
         Vec3d vec3d = location.getPos(source);
         Vec2f vec2f = rotation == null ? null : rotation.getRotation(source);

@@ -10,7 +10,6 @@
     "access.IChunkHolder",
     "access.IChunkTicket",
     "access.IClientConnection",
-    "access.IEntityPositionS2CPacket",
     "access.IEntityTrackerEntry",
     "access.IPointOfInterestSet",
     "access.IServerChunkManager",
